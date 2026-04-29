@@ -1,0 +1,645 @@
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  TextInput, 
+  TouchableOpacity, 
+  SafeAreaView, 
+  ScrollView, 
+  KeyboardAvoidingView, 
+  Platform,
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  Animated,
+  Keyboard,
+  LayoutAnimation,
+  Share
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { 
+  ArrowLeft, 
+  Save, 
+  Heading, 
+  List, 
+  Bold, 
+  Italic, 
+  Palette, 
+  Check, 
+  Trash2, 
+  BookOpen, 
+  ExternalLink,
+  X,
+  Layout,
+  Highlighter,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  Edit3,
+  Tag,
+  FileDown,
+  FileText,
+  Zap,
+  Tag as TagIcon
+} from 'lucide-react-native';
+import { supabase } from '../../src/lib/supabase';
+import { useAuth } from '../../src/context/AuthContext';
+import { useTheme } from '../../src/context/ThemeContext';
+import { PageWrapper } from '../../src/components/PageWrapper';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { FlashcardSvc } from '../../src/services/FlashcardService';
+
+const { width } = Dimensions.get('window');
+
+// STATIC CONSTANTS FOR STABILITY
+const SPACING = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  xxl: 32
+};
+
+const RADIUS = {
+  sm: 4,
+  md: 8,
+  lg: 12,
+  xl: 16,
+  xxl: 24
+};
+
+const HIGHLIGHT_COLORS = ['#FF6A88', '#6A5BFF', '#4FC3F7', '#81C784', '#FFB74D', '#BA68C8'];
+
+export default function NoteEditor() {
+  const { colors } = useTheme();
+  const router = useRouter();
+  const { session } = useAuth();
+  const params = useLocalSearchParams();
+  
+  const id = Array.isArray(params.id) ? params.id[0] : params.id;
+  
+  const [loading, setLoading] = useState(!!id);
+  const [saving, setSaving] = useState(false);
+  const [title, setTitle] = useState((Array.isArray(params.title) ? params.title[0] : params.title) || "");
+  const [content, setContent] = useState("");
+  const [subject, setSubject] = useState((Array.isArray(params.subject) ? params.subject[0] : params.subject) || "General");
+  const [folderName, setFolderName] = useState("");
+  const [items, setItems] = useState<any[]>([]);
+  const [checklist, setChecklist] = useState<{id: string, text: string, checked: boolean}[]>([]);
+  const [newChecklistItem, setNewChecklistItem] = useState("");
+  const [viewMode, setViewMode] = useState<'edit' | 'preview'>('edit');
+  const [expandedSubheadings, setExpandedSubheadings] = useState<Set<string>>(new Set());
+  const [showColorPicker, setShowColorPicker] = useState<number | null>(null);
+  const [nextRevision, setNextRevision] = useState<string | null>(null);
+  const [isExportMenuVisible, setIsExportMenuVisible] = useState(false);
+  const [isPreviewColumns, setIsPreviewColumns] = useState<number>(1);
+  const [lastRevised, setLastRevised] = useState<string | null>(null);
+  const [activeInput, setActiveInput] = useState<{type: 'main' | 'highlight' | 'checklist', id?: string}>({ type: 'main' });
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const [tags, setTags] = useState<string[]>([]);
+  
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const scrollRef = useRef<ScrollView>(null);
+
+  useEffect(() => {
+    if (id) {
+      setViewMode('preview');
+      fetchNote();
+    } else {
+      setViewMode('edit');
+      setLoading(false);
+    }
+  }, [id]);
+
+  const fetchNote = async () => {
+    if (!id) return;
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.from('user_notes').select('*').eq('id', id).single();
+      if (error) throw error;
+      if (data) {
+        setTitle(data.title || "");
+        setSubject(data.subject || "General");
+        setContent(data.content || ""); 
+        // setTags(data.tags || []); // Removed due to missing schema column
+        
+        if (data.updated_at) {
+          const date = new Date(data.updated_at);
+          setLastRevised(date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        }
+        
+        const checkData = data.checklist_notes;
+        if (Array.isArray(checkData)) {
+          setChecklist(checkData);
+        } else if (typeof checkData === 'string' && checkData.startsWith('[')) {
+          try { setChecklist(JSON.parse(checkData)); } catch { setChecklist([]); }
+        }
+        
+        if (Array.isArray(data.items)) {
+          setItems(data.items);
+        } else if (Array.isArray(data.highlights)) {
+          setItems(data.highlights);
+        }
+
+        const { data: nodeData } = await supabase.from('user_note_nodes').select('parent_id').eq('note_id', id).single();
+        if (nodeData?.parent_id) {
+           const { data: parentData } = await supabase.from('user_note_nodes').select('title').eq('id', nodeData.parent_id).single();
+           if (parentData) setFolderName(parentData.title);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Error", "Could not load note content.");
+    } finally {
+      LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+      setLoading(false);
+    }
+  };
+
+  const handleSave = async (isAuto = false) => {
+    if (!id || !session?.user?.id) return;
+    if (!isAuto) setSaving(true);
+    
+    try {
+      const updateData = {
+        title,
+        content,
+        subject,
+        // tags, // Removed due to missing schema column
+        items,
+        checklist_notes: JSON.stringify(checklist),
+        updated_at: new Date().toISOString()
+      };
+      
+      const { error } = await supabase.from('user_notes').update(updateData).eq('id', id);
+      if (error) throw error;
+      
+      await supabase.from('user_note_nodes').update({ title, updated_at: new Date().toISOString() }).eq('note_id', id);
+      
+    } catch (err) {
+      console.error(err);
+      if (!isAuto) Alert.alert("Error", "Could not save note.");
+    } finally {
+      if (!isAuto) setSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(() => handleSave(true), 3000);
+    return () => { if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current); };
+  }, [title, content, items, checklist, tags]);
+
+  const applyFormat = (type: string) => {
+    if (activeInput.type === 'main') {
+      const before = content.substring(0, selection.start);
+      const target = content.substring(selection.start, selection.end);
+      const after = content.substring(selection.end);
+      let newText = "";
+      if (type === 'bold') newText = `${before}**${target}**${after}`;
+      else if (type === 'italic') newText = `${before}_${target}_${after}`;
+      else if (type === 'bullet') newText = `${before}\n• ${target}${after}`;
+      else if (type === 'heading') newText = `${before}\n# ${target}${after}`;
+      if (newText) setContent(newText);
+    } else if (activeInput.type === 'highlight' && activeInput.id) {
+       setItems(items.map(item => {
+          if (item.id === activeInput.id) {
+             let txt = item.text;
+             if (type === 'bold') txt = `**${txt}**`;
+             else if (type === 'italic') txt = `_${txt}_`;
+             return { ...item, text: txt };
+          }
+          return item;
+       }));
+    }
+  };
+
+  const addItem = (type: 'highlight' | 'microTopicHeading') => {
+    const newItem = {
+      id: Math.random().toString(36).substr(2, 9),
+      type,
+      text: "",
+      color: type === 'highlight' ? colors.primary : undefined
+    };
+    const next = [...items, newItem];
+    setItems(next);
+    if (type === 'microTopicHeading') {
+       const nextSet = new Set(expandedSubheadings);
+       nextSet.add(newItem.id);
+       setExpandedSubheadings(nextSet);
+    }
+  };
+
+  const toggleSubheading = (itemId: string) => {
+    const nextSet = new Set(expandedSubheadings);
+    if (nextSet.has(itemId)) {
+      nextSet.delete(itemId);
+      setExpandedSubheadings(nextSet);
+    } else {
+      nextSet.add(itemId);
+      setExpandedSubheadings(nextSet);
+    }
+  };
+
+  const addChecklistItem = () => {
+    if (!newChecklistItem.trim()) return;
+    setChecklist([...checklist, { id: Date.now().toString(), text: newChecklistItem, checked: false }]);
+    setNewChecklistItem("");
+  };
+
+  const toggleChecklistItem = (itemId: string) => {
+    setChecklist(checklist.map(item => item.id === itemId ? { ...item, checked: !item.checked } : item));
+  };
+
+  const removeChecklistItem = (itemId: string) => {
+    setChecklist(checklist.filter(item => item.id !== itemId));
+  };
+
+  const handleExportPDF = async (cols: number) => {
+    setIsExportMenuVisible(false);
+    try {
+      const html = `
+        <html>
+          <head>
+            <style>
+              body { font-family: sans-serif; padding: 20px; color: #1f2937; }
+              h1 { font-size: 24px; margin-bottom: 5px; color: #111827; }
+              .meta { font-size: 12px; color: #6b7280; margin-bottom: 20px; text-transform: uppercase; letter-spacing: 1px; }
+              .content { line-height: 1.6; margin-bottom: 30px; font-size: 15px; }
+              .highlight-container { display: flex; flex-wrap: wrap; gap: 15px; }
+              .highlight-card { 
+                width: ${cols === 2 ? '45%' : '100%'}; 
+                padding: 15px; 
+                border-radius: 8px; 
+                border-left: 5px solid #6366f1;
+                background: #f9fafb;
+                margin-bottom: 15px;
+              }
+              .heading { font-weight: 900; font-size: 14px; color: #4338ca; margin-top: 25px; margin-bottom: 10px; width: 100%; border-bottom: 1px solid #e5e7eb; padding-bottom: 5px; }
+            </style>
+          </head>
+          <body>
+            <h1>${title || 'Untitled Note'}</h1>
+            <div class="meta">${subject} • ${lastRevised || ''}</div>
+            <div class="content">${content.replace(/\n/g, '<br/>')}</div>
+            <div class="highlight-container">
+              ${items.map(item => {
+                if (item.type === 'microTopicHeading') return `<div class="heading">${item.text.toUpperCase()}</div>`;
+                return `<div class="highlight-card">${item.text}</div>`;
+              }).join('')}
+            </div>
+          </body>
+        </html>
+      `;
+      const { uri } = await Print.printToFileAsync({ html });
+      await Sharing.shareAsync(uri);
+    } catch (err) {
+      console.error(err);
+      Alert.alert("Export Error", "Could not generate PDF.");
+    }
+  };
+
+  const handlePreviewPDF = () => {
+    Alert.alert(
+      "PDF Layout",
+      "Choose your preferred layout",
+      [
+        { text: "1 Column", onPress: () => handleExportPDF(1) },
+        { text: "2 Columns", onPress: () => handleExportPDF(2) },
+        { text: "Cancel", style: "cancel" }
+      ]
+    );
+  };
+
+  const renderHighlights = (allowAdd: boolean) => {
+    let isCurrentExpanded = true; 
+    const currentItems = items || [];
+    const isActuallyEditing = viewMode === 'edit';
+    const isTwoCol = isPreviewColumns === 2 && viewMode === 'preview';
+
+    return (
+      <View style={styles.highlightsContainer}>
+        <View style={styles.highlightsHeaderRow}>
+          <Text style={[styles.highlightsHeader, { color: colors.textTertiary }]}>PRACTICE HIGHLIGHTS</Text>
+          {allowAdd && isActuallyEditing && (
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity onPress={() => addItem('microTopicHeading')} style={styles.miniAddBtn}>
+                <Plus size={12} color={colors.primary} /><Text style={{ fontSize: 10, color: colors.primary, fontWeight: '700' }}>HEADING</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => addItem('highlight')} style={styles.miniAddBtn}>
+                <Plus size={12} color={colors.primary} /><Text style={{ fontSize: 10, color: colors.primary, fontWeight: '700' }}>POINT</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        <View style={isTwoCol ? { flexDirection: 'row', flexWrap: 'wrap', gap: 12 } : {}}>
+          {currentItems.map((item, idx) => {
+            if (item.type === 'microTopicHeading') {
+              const itemId = item.id || `head-${idx}`;
+              isCurrentExpanded = expandedSubheadings.has(itemId);
+              return (
+                <TouchableOpacity 
+                  key={itemId} 
+                  activeOpacity={0.7}
+                  onPress={() => toggleSubheading(itemId)}
+                  style={[styles.headingRow, isTwoCol && { width: '100%' }]}
+                >
+                  <View style={{ paddingRight: 10 }}>
+                     {isCurrentExpanded ? <ChevronDown size={14} color={colors.primary} /> : <ChevronRight size={14} color={colors.textTertiary} />}
+                  </View>
+                  {isActuallyEditing ? (
+                    <TextInput 
+                      style={[styles.groupHeading, { color: colors.textPrimary, flex: 1 }]} 
+                      value={item.text} 
+                      onChangeText={(t) => {
+                        const next = [...items];
+                        next[idx] = { ...next[idx], text: t };
+                        setItems(next);
+                      }}
+                      placeholder="HEADING NAME"
+                      onPressIn={(e) => e.stopPropagation && e.stopPropagation()}
+                    />
+                  ) : (
+                    <Text style={[styles.groupHeading, { color: colors.textPrimary, flex: 1 }]}>{item.text.toUpperCase()}</Text>
+                  )}
+                </TouchableOpacity>
+              );
+            }
+            if (!isCurrentExpanded) return null;
+            return (
+              <View key={item.id || idx} style={[{ marginBottom: 12 }, isTwoCol && { width: (width - 48 - 12) / 2 }]}>
+                <LinearGradient
+                  colors={isActuallyEditing ? [colors.surface, colors.surface] : [(item.color || colors.primary) + '20', colors.surface]}
+                  style={[styles.highlightCard, { borderColor: isActuallyEditing ? colors.border : (item.color || colors.primary) + '40', borderLeftColor: item.color || colors.primary, borderLeftWidth: 4 }]}
+                >
+                  {isActuallyEditing ? (
+                    <TextInput 
+                      style={[styles.highlightText, { color: colors.textPrimary }]} 
+                      value={item.text} 
+                      onChangeText={(t) => {
+                        const next = [...items];
+                        next[idx] = { ...next[idx], text: t };
+                        setItems(next);
+                      }}
+                      multiline
+                      onFocus={() => setActiveInput({ type: 'highlight', id: item.id })}
+                    />
+                  ) : (
+                    <Text style={[styles.highlightText, { color: colors.textPrimary }]}>{item.text}</Text>
+                  )}
+                  {isActuallyEditing && (
+                    <View style={styles.highlightActions}>
+                      <TouchableOpacity onPress={() => setShowColorPicker(showColorPicker === idx ? null : idx)}>
+                        <Palette size={14} color={colors.textTertiary} />
+                      </TouchableOpacity>
+                      <TouchableOpacity onPress={() => setItems(items.filter((_, i) => i !== idx))}>
+                        <Trash2 size={14} color="#ef4444" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </LinearGradient>
+                
+                {isActuallyEditing && showColorPicker === idx && (
+                  <View style={styles.popoverPicker}>
+                    {HIGHLIGHT_COLORS.map(c => (
+                      <TouchableOpacity key={c} style={[styles.colorBubble, { backgroundColor: c }]} onPress={() => {
+                        const next = [...items];
+                        next[idx] = { ...next[idx], color: c };
+                        setItems(next);
+                        setShowColorPicker(null);
+                      }} />
+                    ))}
+                  </View>
+                )}
+              </View>
+            );
+          })}
+        </View>
+      </View>
+    );
+  };
+
+  return (
+    <PageWrapper>
+      <View style={[styles.container, { backgroundColor: colors.bg }]}>
+        <View style={[styles.header, { backgroundColor: colors.surface, borderBottomColor: colors.border }]}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.headerBtn}><ArrowLeft size={24} color={colors.textPrimary} /></TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <View style={styles.metaRow}>
+                <Text style={[styles.headerSub, { color: colors.primary }]}>{subject || 'General'}</Text>
+                {nextRevision && <View style={[styles.revBadge, { backgroundColor: colors.primary + '20' }]}><Text style={[styles.revText, { color: colors.primary }]}>REVISE</Text></View>}
+            </View>
+            <Text style={[styles.headerTitle, { color: colors.textPrimary }]} numberOfLines={1}>{title || 'Untitled Note'}</Text>
+          </View>
+          <View style={styles.headerActions}>
+            <TouchableOpacity onPress={() => setViewMode(viewMode === 'edit' ? 'preview' : 'edit')} style={styles.headerIcon}>
+               {viewMode === 'edit' ? <BookOpen size={22} color={colors.textSecondary} /> : <Edit3 size={22} color={colors.textSecondary} />}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handleSave(false)} style={styles.saveBtn}>
+              {saving ? <ActivityIndicator size="small" color={colors.primary} /> : <Save size={22} color={colors.primary} />}
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => setIsExportMenuVisible(true)} style={styles.headerIcon}>
+               <FileDown size={22} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+          <View style={{ flex: 1 }}>
+            {loading && (
+              <View style={{ position: 'absolute', top: 20, left: 0, right: 0, zIndex: 10, alignItems: 'center', pointerEvents: 'none' }}>
+                <View style={{ backgroundColor: colors.surface + 'CC', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 1, borderColor: colors.border }}>
+                  <ActivityIndicator size="small" color={colors.primary} />
+                  <Text style={{ color: colors.textTertiary, fontSize: 10, fontWeight: '700' }}>SYNCING...</Text>
+                </View>
+              </View>
+            )}
+            <ScrollView ref={scrollRef} contentContainerStyle={styles.scrollContent}>
+              {viewMode === 'edit' ? (
+              <View>
+                <TextInput style={[styles.titleInput, { color: colors.textPrimary }]} placeholder="Note Title" value={title} onChangeText={setTitle} multiline />
+                
+                <View style={styles.checklistSection}>
+                   <View style={[styles.checklistInputRow, { borderColor: colors.border }]}>
+                      <TextInput style={[styles.checklistInput, { color: colors.textPrimary }]} placeholder="Add task..." value={newChecklistItem} onChangeText={setNewChecklistItem} onSubmitEditing={addChecklistItem} />
+                      <TouchableOpacity onPress={addChecklistItem} style={[styles.addCheckBtn, { backgroundColor: colors.primary }]}><Plus size={18} color="#fff" /></TouchableOpacity>
+                   </View>
+                   {checklist.map(item => (
+                     <View key={item.id} style={styles.checkItem}>
+                        <TouchableOpacity onPress={() => toggleChecklistItem(item.id)} style={[styles.checkbox, { borderColor: item.checked ? colors.primary : colors.textTertiary }, item.checked && { backgroundColor: colors.primary }]}>{item.checked && <Check size={12} color="#fff" strokeWidth={4} />}</TouchableOpacity>
+                        <TextInput style={[styles.checkText, { color: item.checked ? colors.textTertiary : colors.textPrimary }]} value={item.text} onChangeText={(txt) => setChecklist(checklist.map(c => c.id === item.id ? { ...c, text: txt } : c))} />
+                        <TouchableOpacity onPress={() => removeChecklistItem(item.id)}><X size={16} color={colors.textTertiary} /></TouchableOpacity>
+                     </View>
+                   ))}
+                </View>
+
+                {renderHighlights(true)}
+
+                <TextInput 
+                  style={[styles.mainEditor, { color: colors.textPrimary }]} 
+                  placeholder="Start writing..." 
+                  multiline 
+                  value={content} 
+                  onChangeText={setContent} 
+                  onFocus={() => setActiveInput({ type: 'main' })} 
+                  onSelectionChange={(e) => setSelection(e.nativeEvent.selection)} 
+                />
+              </View>
+            ) : (
+              <View>
+                <LinearGradient colors={[colors.primary + '15', colors.surface, colors.surface]} style={styles.heroHeader}>
+                  <View style={[styles.heroIconBox, { backgroundColor: colors.primary + '25' }]}><FileText size={24} color={colors.primary} /></View>
+                  <Text style={[styles.previewTitle, { color: colors.textPrimary }]}>{title || 'Untitled Note'}</Text>
+                  {lastRevised && <Text style={{ color: colors.textTertiary, fontSize: 12 }}>Last revised: {lastRevised}</Text>}
+                </LinearGradient>
+                {content ? <Text style={[styles.mainEditor, { color: colors.textPrimary, marginBottom: 24 }]}>{content}</Text> : null}
+                {checklist.length > 0 && (
+                  <View style={styles.checklistSection}>
+                    <Text style={[styles.highlightsHeader, { color: colors.textTertiary }]}>CHECKLIST</Text>
+                    {checklist.map(item => (
+                      <View key={item.id} style={styles.checkItem}>
+                        <View style={[styles.checkbox, { borderColor: item.checked ? colors.primary : colors.textTertiary }, item.checked && { backgroundColor: colors.primary }]}>{item.checked && <Check size={12} color="#fff" strokeWidth={4} />}</View>
+                        <Text style={[styles.checkText, { color: item.checked ? colors.textTertiary : colors.textPrimary, textDecorationLine: item.checked ? 'line-through' : 'none' }]}>{item.text}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+                {renderHighlights(true)}
+              </View>
+            )}
+            </ScrollView>
+          </View>
+        </KeyboardAvoidingView>
+
+        {viewMode === 'edit' && (
+          <View style={[styles.floatingBar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+             <TouchableOpacity style={styles.barItem} onPress={() => applyFormat('heading')}><Heading size={20} color={colors.textSecondary} /></TouchableOpacity>
+             <TouchableOpacity style={styles.barItem} onPress={() => applyFormat('bold')}><Bold size={20} color={colors.textSecondary} /></TouchableOpacity>
+             <TouchableOpacity style={styles.barItem} onPress={() => applyFormat('italic')}><Italic size={20} color={colors.textSecondary} /></TouchableOpacity>
+             <TouchableOpacity style={styles.barItem} onPress={() => applyFormat('bullet')}><List size={20} color={colors.textSecondary} /></TouchableOpacity>
+             <View style={styles.barDivider} />
+             <TouchableOpacity style={styles.barItem} onPress={() => {
+                LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                setIsPreviewColumns(isPreviewColumns === 1 ? 2 : 1);
+             }}>
+                <Layout size={20} color={isPreviewColumns === 2 ? colors.primary : colors.textSecondary} />
+             </TouchableOpacity>
+          </View>
+        )}
+
+        {isExportMenuVisible && (
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 999 }]}>
+            <TouchableOpacity style={{ flex: 1 }} onPress={() => setIsExportMenuVisible(false)} />
+            <View style={[styles.exportMenu, { backgroundColor: colors.surface }]}>
+              <View style={styles.sheetHandle} />
+              <Text style={[styles.exportTitle, { color: colors.textPrimary }]}>Export Note</Text>
+              
+              <TouchableOpacity style={styles.exportItem} onPress={handlePreviewPDF}>
+                 <View style={[styles.exportIconBox, { backgroundColor: '#e0e7ff' }]}><BookOpen size={20} color="#4338ca" /></View>
+                 <View>
+                    <Text style={[styles.exportLabel, { color: colors.textPrimary }]}>Preview PDF</Text>
+                    <Text style={styles.exportSub}>Choose 1 or 2 columns</Text>
+                 </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.exportItem} onPress={() => handleExportPDF(1)}>
+                 <View style={[styles.exportIconBox, { backgroundColor: '#fef3c7' }]}><FileDown size={20} color="#d97706" /></View>
+                 <View>
+                    <Text style={[styles.exportLabel, { color: colors.textPrimary }]}>Save as PDF</Text>
+                    <Text style={styles.exportSub}>Download to your device</Text>
+                 </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={styles.exportItem} onPress={async () => {
+                 try { await Share.share({ message: `${title}\n\n${content}` }); } catch (err) { console.error(err); }
+              }}>
+                 <View style={[styles.exportIconBox, { backgroundColor: '#dcfce7' }]}><ExternalLink size={20} color="#16a34a" /></View>
+                 <View>
+                    <Text style={[styles.exportLabel, { color: colors.textPrimary }]}>Plain Text</Text>
+                    <Text style={styles.exportSub}>Share via other apps</Text>
+                 </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.exportItem, { borderBottomWidth: 0 }]} onPress={async () => {
+                 setIsExportMenuVisible(false);
+                 setSaving(true);
+                 try {
+                    await FlashcardSvc.createFromNote(session?.user?.id, id, title, content, items);
+                    Alert.alert("Success", "Note content added to flashcards!");
+                 } catch (err) { console.error(err); } finally { setSaving(false); }
+              }}>
+                 <View style={[styles.exportIconBox, { backgroundColor: '#fae8ff' }]}><Zap size={20} color="#c026d3" /></View>
+                 <View>
+                    <Text style={[styles.exportLabel, { color: colors.textPrimary }]}>To Flashcards</Text>
+                    <Text style={styles.exportSub}>AI generated study deck</Text>
+                 </View>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+    </PageWrapper>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    gap: 12
+  },
+  headerBtn: { padding: 4 },
+  headerCenter: { flex: 1 },
+  headerSub: { fontSize: 10, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 1 },
+  headerTitle: { fontSize: 18, fontWeight: '900' },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  headerIcon: { padding: 4 },
+  saveBtn: { padding: 4 },
+  scrollContent: { padding: SPACING.lg, paddingBottom: 120 },
+  titleInput: { fontSize: 24, fontWeight: '900', marginBottom: SPACING.xl },
+  checklistSection: { marginBottom: SPACING.xl },
+  checklistInputRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: RADIUS.lg, paddingHorizontal: 12, marginBottom: 12 },
+  checklistInput: { flex: 1, height: 44, fontSize: 14, fontWeight: '600' },
+  addCheckBtn: { padding: 6, borderRadius: 8 },
+  checkItem: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+  checkbox: { width: 20, height: 20, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  checkText: { fontSize: 14, fontWeight: '500', flex: 1 },
+  mainEditor: { fontSize: 16, lineHeight: 24, minHeight: 200, textAlignVertical: 'top' },
+  highlightsContainer: { marginTop: 24, marginBottom: 24 },
+  highlightsHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  highlightsHeader: { fontSize: 11, fontWeight: '900', letterSpacing: 1.5 },
+  miniAddBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4, paddingHorizontal: 8, borderRadius: 8, backgroundColor: 'rgba(0,0,0,0.05)' },
+  highlightCard: { padding: 16, borderRadius: RADIUS.lg, borderLeftWidth: 4, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(0,0,0,0.05)' },
+  highlightText: { fontSize: 14, lineHeight: 20, fontWeight: '600' },
+  highlightActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 12, marginTop: 8 },
+  popoverPicker: { flexDirection: 'row', gap: 8, padding: 8, backgroundColor: 'rgba(0,0,0,0.05)', borderRadius: 12, marginBottom: 12 },
+  colorBubble: { width: 24, height: 24, borderRadius: 12 },
+  headingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 12, marginBottom: 12 },
+  groupHeading: { fontSize: 14, fontWeight: '900', letterSpacing: 0.5 },
+  floatingBar: { position: 'absolute', bottom: 30, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 30, borderWidth: 1, gap: 16, elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.1, shadowRadius: 20 },
+  barItem: { padding: 4 },
+  barDivider: { width: 1, height: 20, backgroundColor: 'rgba(0,0,0,0.1)' },
+  heroHeader: { padding: 32, paddingBottom: 40, borderRadius: 32, marginBottom: 24, gap: 12 },
+  heroIconBox: { width: 56, height: 56, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  previewTitle: { fontSize: 28, fontWeight: '900', letterSpacing: -0.5 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 2 },
+  revBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  revText: { fontSize: 8, fontWeight: '900' },
+  exportMenu: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 32, borderTopLeftRadius: 32, borderTopRightRadius: 32, shadowColor: '#000', shadowOffset: { width: 0, height: -10 }, shadowOpacity: 0.1, shadowRadius: 20, elevation: 20 },
+  sheetHandle: { width: 40, height: 4, backgroundColor: 'rgba(0,0,0,0.1)', borderRadius: 2, alignSelf: 'center', marginBottom: 24 },
+  exportTitle: { fontSize: 20, fontWeight: '900', marginBottom: 24 },
+  exportItem: { flexDirection: 'row', alignItems: 'center', gap: 16, paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
+  exportIconBox: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  exportLabel: { fontSize: 15, fontWeight: '800' },
+  exportSub: { fontSize: 12, color: '#6b7280', marginTop: 2 }
+});
