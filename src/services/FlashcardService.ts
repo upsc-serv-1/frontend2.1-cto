@@ -17,6 +17,7 @@ export interface NewCardInput {
   card_type?: 'qa' | 'note_block' | 'manual';
   source?: CardSource;
   question_id?: string | null;
+  test_id?: string | null;
 }
 
 export class FlashcardSvc {
@@ -61,7 +62,7 @@ export class FlashcardSvc {
   // ============ CREATE — generic ============
   static async createCard(userId: string, input: NewCardInput) {
     if (!input.front_text?.trim()) throw new Error('Front text required');
-    if (!input.back_text?.trim())  throw new Error('Back text required');
+    if (!input.back_text?.trim()) throw new Error('Back text required');
 
     // Try to dedupe by source.question_id when present
     let card: { id: string } | null = null;
@@ -73,19 +74,20 @@ export class FlashcardSvc {
       const { data, error } = await supabase
         .from('cards')
         .insert({
-          question_id: input.question_id ?? null,
+          question_id: input.question_id || `manual_${Date.now()}`,
           subject: input.subject || 'General',
           section_group: input.section_group || 'General',
           microtopic: input.microtopic || 'General',
           front_text: input.front_text,
           back_text: input.back_text,
-          front_image_url: input.front_image_url ?? null,
-          back_image_url:  input.back_image_url  ?? null,
-          card_type: input.card_type ?? 'manual',
-          source: input.source ?? null,
+          front_image_url: input.front_image_url || null,
+          back_image_url: input.back_image_url || null,
+          card_type: input.card_type || 'manual',
+          source: input.source || {},
+          test_id: input.test_id || 'manual',
           // legacy fields kept for backward compat:
           question_text: input.front_text,
-          answer_text:  input.back_text,
+          answer_text: input.back_text,
         })
         .select('id').single();
       if (error) throw error;
@@ -114,10 +116,10 @@ export class FlashcardSvc {
     const optionLines = Object.entries(opts).map(([k, v]) => `(${k.toUpperCase()}) ${v}`).join('\n');
     const front_text = `${q.question_text || q.questionText || ''}\n\n${optionLines}`.trim();
 
-    const correctKey   = q.correct_answer || q.correctAnswer;
-    const correctText  = correctKey && opts[correctKey] ? `**Correct: (${correctKey.toUpperCase()})** ${opts[correctKey]}` : '';
-    const explanation  = q.explanation_markdown || q.explanation || '';
-    const back_text    = [correctText, explanation].filter(Boolean).join('\n\n');
+    const correctKey = q.correct_answer || q.correctAnswer;
+    const correctText = correctKey && opts[correctKey] ? `**Correct: (${correctKey.toUpperCase()})** ${opts[correctKey]}` : '';
+    const explanation = q.explanation_markdown || q.explanation || '';
+    const back_text = [correctText, explanation].filter(Boolean).join('\n\n');
 
     return this.createCard(userId, {
       front_text, back_text,
@@ -126,6 +128,7 @@ export class FlashcardSvc {
       microtopic: q.micro_topic || q.microtopic || 'General',
       card_type: 'qa',
       question_id: q.id,
+      test_id: q.test_id || q.testId || q.tests?.id || 'manual',
       source: { kind: 'question', question_id: q.id },
     });
   }
@@ -145,7 +148,7 @@ export class FlashcardSvc {
   }) {
     return this.createCard(userId, {
       front_text: params.front_text,
-      back_text:  params.back_text,
+      back_text: params.back_text,
       subject: params.subject, section_group: params.section_group, microtopic: params.microtopic,
       card_type: 'note_block',
       front_image_url: params.front_image_url, back_image_url: params.back_image_url,
@@ -157,7 +160,7 @@ export class FlashcardSvc {
   static async updateCard(cardId: string, patch: Partial<NewCardInput>) {
     const updateData: any = { ...patch, updated_at: new Date().toISOString() };
     if (patch.front_text) updateData.question_text = patch.front_text;
-    if (patch.back_text)  updateData.answer_text   = patch.back_text;
+    if (patch.back_text) updateData.answer_text = patch.back_text;
     const { error } = await supabase.from('cards').update(updateData).eq('id', cardId);
     if (error) throw error;
   }
@@ -168,22 +171,9 @@ export class FlashcardSvc {
 
   // ============ REVIEW (FIX #3 — proper SM-2) ============
   static async reviewCard(userId: string, cardId: string, quality: number) {
-    const { data: existing } = await supabase
-      .from('user_cards').select('*').eq('user_id', userId).eq('card_id', cardId).maybeSingle();
-
-    let cur = existing;
-    if (!cur) {
-      // First review of this card — insert a fresh row
-      const { data: inserted, error: insErr } = await supabase.from('user_cards').insert({
-        user_id: userId, card_id: cardId, ease_factor: 2.5,
-        interval_days: 0, repetitions: 0, lapses: 0,
-        next_review: new Date().toISOString(), status: 'new',
-      }).select('*').single();
-      if (insErr) throw insErr;
-      cur = inserted;
-    }
-
-    if (!cur) throw new Error('Could not find or create user_cards row');
+    const { data: cur, error } = await supabase
+      .from('user_cards').select('*').eq('user_id', userId).eq('card_id', cardId).single();
+    if (error) throw error;
 
     const sm = applySM2({
       ease_factor: Number(cur.ease_factor ?? 2.5),
@@ -211,9 +201,9 @@ export class FlashcardSvc {
       user_id: userId, card_id: cardId,
       quality,
       prev_interval: cur.interval_days,
-      new_interval:  sm.interval_days,
+      new_interval: sm.interval_days,
       prev_ef: cur.ease_factor,
-      new_ef:  sm.ease_factor,
+      new_ef: sm.ease_factor,
     });
     return sm;
   }

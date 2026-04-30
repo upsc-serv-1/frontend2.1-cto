@@ -10,6 +10,7 @@ import { DEFAULT_ANALYTICS_LAYOUT, loadAnalyticsLayout } from '../../utils/analy
 import { useQuizStore } from '../../store/quizStore';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../context/AuthContext';
+import { StudentSync } from '../../services/StudentSync';
 
 interface ReviewSectionProps {
   testAttemptId: string;
@@ -67,14 +68,17 @@ export const ReviewSection = ({ testAttemptId }: ReviewSectionProps) => {
         new_cat: errorType,
       });
 
-      // Persist to question_states
+      // Persist to question_states via StudentSync
       if (session?.user?.id) {
-        await supabase.from('question_states').upsert({
-          user_id: session.user.id,
-          question_id: questionId,
-          attempt_id: testAttemptId,
-          error_category: errorType,
-        }, { onConflict: 'user_id,question_id,attempt_id' });
+        await StudentSync.enqueue('question_state', {
+          userId: session.user.id,
+          questionId: questionId,
+          testId: testId,
+          attemptId: testAttemptId,
+          patch: {
+            error_category: errorType
+          }
+        });
       }
     } catch (err) {
       console.error('Failed to save tag', err);
@@ -383,7 +387,7 @@ export const ReviewSection = ({ testAttemptId }: ReviewSectionProps) => {
                    <Text style={[styles.mistakeQSubject, { color: colors.primary }]}>{q.subject}</Text>
                 </View>
                 <View style={styles.errorChipRow}>
-                  {['Silly Mistake', 'Conceptual', 'Reading', 'Elimination', 'Overthinking'].map(cat => (
+                  {['Fact Mistake', 'Concept Gap', 'Silly Mistake', 'Overthinking', 'Skipped'].map(cat => (
                     <TouchableOpacity 
                       key={cat} 
                       onPress={() => handleTagError(q.id, cat)}

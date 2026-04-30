@@ -49,7 +49,7 @@ const createBaseStats = (): PerformanceStats => ({
 const createBaseAdvanced = (): AdvancedMetrics => ({
   fatigue: {},
   difficulty: { 'Easy': { total: 0, correct: 0 }, 'Medium': { total: 0, correct: 0 }, 'Hard': { total: 0, correct: 0 } },
-  errors: { 'Conceptual': 0, 'Elimination': 0, 'Silly': 0, 'Other': 0 },
+  errors: { 'Fact Mistake': 0, 'Concept Gap': 0, 'Silly Mistake': 0, 'Overthinking': 0, 'Skipped': 0 },
   confidence: {
     '100% Sure': { total: 0, correct: 0, incorrect: 0 },
     'Logical Elimination': { total: 0, correct: 0, incorrect: 0 },
@@ -145,16 +145,8 @@ export function buildHierarchicalPerformanceReport(questions: QuestionAttempt[])
       // Errors
       if (isIncorrect) {
         const e = question.errorCategory || 'Other';
-        const mapping: Record<string, string> = {
-          'Concept Gap': 'Conceptual',
-          'Fact Mistake': 'Conceptual',
-          'Silly Mistake': 'Silly',
-          'Overthinking': 'Elimination',
-          'Skipped': 'Other'
-        };
-        const group = mapping[e] || e;
-        if (!t.errors[group]) t.errors[group] = 0;
-        t.errors[group]++;
+        if (!t.errors[e]) t.errors[e] = 0;
+        t.errors[e]++;
       }
     });
 

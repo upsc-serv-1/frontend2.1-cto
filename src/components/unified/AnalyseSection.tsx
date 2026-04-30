@@ -252,7 +252,7 @@ export const AnalyseSection = ({ userId }: AnalyseSectionProps) => {
           height={200} 
         />
       </View>
-    ),
+    ) : null,
     theme_heatmap: (activeFilter === 'All' || activeFilter === 'PYQ') ? (
       <View key="theme_heatmap" style={[styles.chartCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.cardHeader}>
@@ -298,7 +298,7 @@ export const AnalyseSection = ({ userId }: AnalyseSectionProps) => {
           </View>
         </ScrollView>
       </View>
-    ),
+    ) : null,
     fatigue_difficulty: activePerf ? (
       <View key="fatigue_difficulty" style={[styles.chartCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.cardHeader}>
@@ -348,7 +348,7 @@ export const AnalyseSection = ({ userId }: AnalyseSectionProps) => {
               count: count
             }))}
           size={160}
-          colors={['#ef4444', '#f59e0b', '#fbbf24', colors.textTertiary]}
+          colors={['#ef4444', '#f59e0b', '#3b82f6', '#8b5cf6', '#64748b']}
           centerLabel={Object.values(activePerf.errors).reduce((a, b) => a + b, 0).toString()}
           centerSubLabel="MISTAKES"
         />
