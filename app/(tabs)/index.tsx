@@ -119,7 +119,6 @@ export default function Home() {
 
         let dataPool = {};
         if (widgetCategory === 'Optional') {
-          // Match tracker.tsx logic for activeOptionalSyllabus
           const sourceSyllabus = (optionalChoice === 'Anthropology') ? require('../../src/data/syllabus').ANTHROPOLOGY_SYLLABUS : { "Paper 1": { "Fundamentals": [] }, "Paper 2": { "Indian Context": [] } };
           dataPool = {
             [`${optionalChoice} Paper 1`]: sourceSyllabus["Paper 1"],
@@ -132,7 +131,6 @@ export default function Home() {
         }
 
         Object.entries(dataPool).forEach(([sub, groups]) => {
-          // If we have selected subjects, only show those. Otherwise show all in category.
           if (selectedSubjects.length > 0 && !selectedSubjects.includes(sub)) return;
           
           if (!subjectStats[sub]) {
@@ -143,7 +141,6 @@ export default function Home() {
           Object.entries(groups as any).forEach(([group, topics]) => {
             (topics as string[]).forEach(topic => {
               totalItems++;
-              // Path matches tracker.tsx format: "${sub}.${group}.${topic}"
               const path = `${sub}.${group}.${topic}`;
               const isMastered = progress[path]?.mastered;
               if (isMastered) completedItems++;
@@ -185,7 +182,6 @@ export default function Home() {
 
   const onRefresh = async () => { setRefreshing(true); await load(); refreshWidgets(); setRefreshing(false); };
 
-  // ── Widget Edit Mode ──
   const handleLongPressIn = () => {
     longPressTimer.current = setTimeout(() => {
       Vibration.vibrate(50);
@@ -206,243 +202,209 @@ export default function Home() {
 
   return (
     <PageWrapper>
-      <ScrollView 
-        contentContainerStyle={{ padding: spacing.lg, paddingBottom: 120 }} 
+      <DraggableFlatList
+        data={activeWidgets}
+        keyExtractor={(item) => item.id}
+        onDragEnd={handleReorder}
+        activationDistance={10}
+        contentContainerStyle={{ padding: spacing.lg, paddingBottom: 120 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
         keyboardShouldPersistTaps="handled"
-      >
-        <Pressable onPressIn={handleLongPressIn} onPressOut={handleLongPressOut} style={styles.topRow}>
-          <View>
-            <Text style={[styles.small, { color: colors.textTertiary }]}>{isEditMode ? 'EDITING WIDGETS' : 'DASHBOARD'}</Text>
-            <Text style={[styles.h1, { color: colors.textPrimary }]}>{name}.</Text>
-          </View>
-          {isEditMode ? (
-            <TouchableOpacity onPress={() => setIsEditMode(false)} style={[styles.doneBtn, { backgroundColor: colors.primary }]}>
-              <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>Done</Text>
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity onPress={() => router.push('/profile')} style={styles.avatarBtn}>
-               <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
-                  <Text style={styles.avatarText}>{(name[0] || 'A').toUpperCase()}</Text>
+        ListHeaderComponent={() => (
+          <>
+            <Pressable onPressIn={handleLongPressIn} onPressOut={handleLongPressOut} style={styles.topRow}>
+              <View>
+                <Text style={[styles.small, { color: colors.textTertiary }]}>{isEditMode ? 'EDITING WIDGETS' : 'DASHBOARD'}</Text>
+                <Text style={[styles.h1, { color: colors.textPrimary }]}>{name}.</Text>
+              </View>
+              {isEditMode ? (
+                <TouchableOpacity onPress={() => setIsEditMode(false)} style={[styles.doneBtn, { backgroundColor: colors.primary }]}>
+                  <Text style={{ color: '#fff', fontWeight: '900', fontSize: 13 }}>Done</Text>
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity onPress={() => router.push('/profile')} style={styles.avatarBtn}>
+                  <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
+                    <Text style={styles.avatarText}>{(name[0] || 'A').toUpperCase()}</Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            </Pressable>
+            
+            <View style={{ marginBottom: spacing.lg }}>
+              <GlobalSearchBar 
+                placeholder="Search questions, notes, topics..." 
+                onSearch={(q, f) => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                  router.push({
+                    pathname: "/unified/arena",
+                    params: { 
+                      tab: 'search',
+                      query: q,
+                      filters: JSON.stringify(f)
+                    }
+                  } as any);
+                }}
+              />
+            </View>
+
+            <View style={styles.dashboardRow}>
+               <View style={[styles.streakCard, { backgroundColor: colors.primary + '10', borderColor: colors.primary + '20' }]}>
+                  <Flame color={colors.primary} size={24} fill={colors.primary} />
+                  <View style={{ marginLeft: 12 }}>
+                     <Text style={[styles.streakVal, { color: colors.textPrimary }]}>{stats.streak} Days</Text>
+                     <Text style={[styles.streakLab, { color: colors.textSecondary }]}>Daily Streak</Text>
+                  </View>
+               </View>
+               <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <Target color={colors.primary} size={24} />
+                  <View style={{ marginLeft: 12 }}>
+                     <Text style={[styles.streakVal, { color: colors.textPrimary }]}>{stats.accuracy}%</Text>
+                     <Text style={[styles.streakLab, { color: colors.textSecondary }]}>Accuracy</Text>
+                  </View>
+               </View>
+            </View>
+
+            <TouchableOpacity 
+              style={[styles.arenaCard, { backgroundColor: colors.primary, shadowColor: colors.primary }]}
+              onPress={() => router.push('/arena')}
+            >
+               <View style={styles.arenaContent}>
+                  <View style={styles.arenaLeft}>
+                    <Zap color="#FFF" size={32} fill="#FFF" />
+                    <View style={{ marginLeft: 16 }}>
+                       <Text style={styles.arenaTitle}>Enter Unified Arena</Text>
+                       <Text style={styles.arenaSub}>Advanced Quiz Engine • All Modes</Text>
+                    </View>
+                  </View>
+                  <View style={styles.arenaRight}>
+                     <ChevronRight color="#FFF" size={24} />
+                  </View>
                </View>
             </TouchableOpacity>
-          )}
-        </Pressable>
-        
-        <View style={{ marginBottom: spacing.lg }}>
-          <GlobalSearchBar 
-            placeholder="Search questions, notes, topics..." 
-            onSearch={(q, f) => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-              router.push({
-                pathname: "/unified/arena",
-                params: { 
-                  tab: 'search',
-                  query: q,
-                  filters: JSON.stringify(f)
-                }
-              } as any);
-            }}
-          />
-        </View>
 
-        <View style={styles.dashboardRow}>
-           <View style={[styles.streakCard, { backgroundColor: colors.primary + '10', borderColor: colors.primary + '20' }]}>
-              <Flame color={colors.primary} size={24} fill={colors.primary} />
-              <View style={{ marginLeft: 12 }}>
-                 <Text style={[styles.streakVal, { color: colors.textPrimary }]}>{stats.streak} Days</Text>
-                 <Text style={[styles.streakLab, { color: colors.textSecondary }]}>Daily Streak</Text>
-              </View>
-           </View>
-           <View style={[styles.summaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <Target color={colors.primary} size={24} />
-              <View style={{ marginLeft: 12 }}>
-                 <Text style={[styles.streakVal, { color: colors.textPrimary }]}>{stats.accuracy}%</Text>
-                 <Text style={[styles.streakLab, { color: colors.textSecondary }]}>Accuracy</Text>
-              </View>
-           </View>
-        </View>
-
-        {/* NEW: Unified Arena Entry Point */}
-        <TouchableOpacity 
-          style={[styles.arenaCard, { backgroundColor: colors.primary, shadowColor: colors.primary }]}
-          onPress={() => router.push('/arena')}
-        >
-           <View style={styles.arenaContent}>
-              <View style={styles.arenaLeft}>
-                <Zap color="#FFF" size={32} fill="#FFF" />
-                <View style={{ marginLeft: 16 }}>
-                   <Text style={styles.arenaTitle}>Enter Unified Arena</Text>
-                   <Text style={styles.arenaSub}>Advanced Quiz Engine • All Modes</Text>
+            <TouchableOpacity 
+              style={[styles.progressCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              activeOpacity={0.9}
+              onPress={() => router.push('/tracker')}
+              onLongPress={() => setConfigVisible(true)}
+            >
+              <View style={styles.progressHeader}>
+                <View style={[styles.iconBox, { backgroundColor: colors.primary + '15' }]}>
+                  <Layout color={colors.primary} size={22} />
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>Syllabus Tracker</Text>
+                    <View style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.primary + '10' }}>
+                       <Text style={{ fontSize: 9, fontWeight: '900', color: colors.primary }}>{widgetCategory.toUpperCase()}</Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.cardDesc, { color: colors.textSecondary }]}>Long press to edit subjects</Text>
+                </View>
+                <View style={[styles.percentBox, { backgroundColor: colors.primary + '15' }]}>
+                  <Text style={[styles.percentText, { color: colors.primary }]}>{stats.syllabusPercent}%</Text>
                 </View>
               </View>
-              <View style={styles.arenaRight}>
-                 <ChevronRight color="#FFF" size={24} />
+              
+              <View style={{ maxHeight: 180 }}>
+                <ScrollView showsVerticalScrollIndicator={true} nestedScrollEnabled={true}>
+                  <View style={styles.progressList}>
+                     {stats.subjectProgress.length > 0 ? (
+                       stats.subjectProgress.map((sp) => (
+                         <SubjectProgress key={sp.label} label={sp.label} progress={sp.progress} color={sp.color} colors={colors} />
+                       ))
+                     ) : (
+                       <View style={{ alignItems: 'center', justifyContent: 'center', height: 120 }}>
+                          <Layout color={colors.textTertiary} size={32} opacity={0.3} />
+                          <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 12, textAlign: 'center' }}>No subjects selected for {widgetCategory}</Text>
+                       </View>
+                     )}
+                  </View>
+                </ScrollView>
               </View>
-           </View>
-        </TouchableOpacity>
+            </TouchableOpacity>
 
-        {/* Real Syllabus Tracker Card */}
-        <TouchableOpacity 
-          style={[styles.progressCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
-          activeOpacity={0.9}
-          onPress={() => router.push('/tracker')}
-          onLongPress={() => setConfigVisible(true)}
-        >
-          <View style={styles.progressHeader}>
-            <View style={[styles.iconBox, { backgroundColor: colors.primary + '15' }]}>
-              <Layout color={colors.primary} size={22} />
+            <Text style={[styles.sectionTitle, { color: colors.textSecondary, marginTop: 24 }]}>RESUME ACTIONS</Text>
+            
+            <View style={styles.resumeGrid}>
+               <ResumeCard icon={<Layout color="#007AFF" size={20} />} label="Syllabus" sub="Track progress" onPress={() => router.push('/tracker')} colors={colors} width={CARD_WIDTH} />
+               <ResumeCard icon={<RotateCcw color="#FF2D55" size={20} />} label="Flashcards" sub="Daily review" onPress={() => router.push('/flashcards')} colors={colors} width={CARD_WIDTH} />
+               <ResumeCard icon={<History color="#8E8E93" size={20} />} label="Review" sub="Past attempts" onPress={() => router.push({ pathname: '/analyse', params: { mode: 'review' } })} colors={colors} width={CARD_WIDTH} />
+               <ResumeCard icon={<BarChart3 color="#34C759" size={20} />} label="Analyse" sub="Performance" onPress={() => router.push({ pathname: '/analyse', params: { mode: 'overall' } })} colors={colors} width={CARD_WIDTH} />
             </View>
-            <View style={{ flex: 1, marginLeft: 12 }}>
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <Text style={[styles.cardTitle, { color: colors.textPrimary }]}>Syllabus Tracker</Text>
-                <View style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, backgroundColor: colors.primary + '10' }}>
-                   <Text style={{ fontSize: 9, fontWeight: '900', color: colors.primary }}>{widgetCategory.toUpperCase()}</Text>
+
+            <Text style={[styles.sectionTitle, { color: colors.textSecondary, marginTop: 24 }]}>MY WIDGETS</Text>
+          </>
+        )}
+        renderItem={({ item, drag, isActive }) => (
+          <ScaleDecorator>
+            <TouchableOpacity
+              onLongPress={drag}
+              delayLongPress={250}
+              disabled={isActive}
+              style={{ marginBottom: 12 }}
+            >
+              <WidgetRenderer
+                widgetKey={item.widget_key}
+                data={widgetData}
+                onArchive={() => handleArchive(item.id)}
+              />
+            </TouchableOpacity>
+          </ScaleDecorator>
+        )}
+        ListFooterComponent={() => (
+          <>
+            <TouchableOpacity onPress={() => setShowManage(true)} style={{ padding: 12, alignItems: 'center', marginBottom: 4 }}>
+              <Text style={{ color: colors.primary, fontWeight: '700' }}>
+                Manage Widgets ({archivedWidgets.length} archived)
+              </Text>
+            </TouchableOpacity>
+
+            <View style={[styles.analyticsPromo, { backgroundColor: colors.surface, borderColor: colors.border, marginTop: 24 }]}>
+               <View style={{ flex: 1 }}>
+                  <Text style={[styles.promoTitle, { color: colors.textPrimary }]}>Detailed Analysis</Text>
+                  <Text style={[styles.promoSub, { color: colors.textSecondary }]}>Check your weak areas and subject trends in the Analyse tab.</Text>
+               </View>
+               <TouchableOpacity 
+                 style={[styles.promoBtn, { backgroundColor: colors.primary }]}
+                 onPress={() => router.push('/(tabs)/analyse')}
+               >
+                  <BarChart3 color="#FFF" size={20} />
+               </TouchableOpacity>
+            </View>
+
+            <Modal visible={showManage} transparent animationType="slide" onRequestClose={() => setShowManage(false)}>
+              <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+                <View style={{ backgroundColor: colors.surface, padding: 24, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%' }}>
+                  <Text style={{ fontSize: 20, fontWeight: '900', color: colors.textPrimary, marginBottom: 16 }}>Archived Widgets</Text>
+                  <ScrollView nestedScrollEnabled>
+                    {archivedWidgets.length === 0 ? (
+                      <Text style={{ color: colors.textTertiary, textAlign: 'center', padding: 24 }}>No archived widgets.</Text>
+                    ) : (
+                      archivedWidgets.map(w => (
+                        <TouchableOpacity
+                          key={w.id}
+                          style={{ flexDirection: 'row', justifyContent: 'space-between', padding: 12, borderBottomWidth: 1, borderBottomColor: colors.border }}
+                          onPress={async () => {
+                            await WidgetService.restore(userId!, w.id);
+                            setWidgets(prev => prev.map(x => x.id === w.id ? { ...x, is_archived: false } : x));
+                          }}
+                        >
+                          <Text style={{ color: colors.textPrimary }}>{w.widget_key}</Text>
+                          <Text style={{ color: colors.primary, fontWeight: '700' }}>RESTORE</Text>
+                        </TouchableOpacity>
+                      ))
+                    )}
+                  </ScrollView>
+                  <TouchableOpacity onPress={() => setShowManage(false)} style={{ padding: 16, alignItems: 'center' }}>
+                    <Text style={{ color: colors.textTertiary, fontWeight: '700' }}>CLOSE</Text>
+                  </TouchableOpacity>
                 </View>
               </View>
-              <Text style={[styles.cardDesc, { color: colors.textSecondary }]}>Long press to edit subjects</Text>
-            </View>
-            <View style={[styles.percentBox, { backgroundColor: colors.primary + '15' }]}>
-              <Text style={[styles.percentText, { color: colors.primary }]}>{stats.syllabusPercent}%</Text>
-            </View>
-          </View>
-          
-          <View style={{ maxHeight: 180 }}>
-            <ScrollView showsVerticalScrollIndicator={true} nestedScrollEnabled={true}>
-              <View style={styles.progressList}>
-                 {stats.subjectProgress.length > 0 ? (
-                   stats.subjectProgress.map((sp) => (
-                     <SubjectProgress key={sp.label} label={sp.label} progress={sp.progress} color={sp.color} colors={colors} />
-                   ))
-                 ) : (
-                   <View style={{ alignItems: 'center', justifyContent: 'center', height: 120 }}>
-                      <Layout color={colors.textTertiary} size={32} opacity={0.3} />
-                      <Text style={{ color: colors.textTertiary, fontSize: 13, marginTop: 12, textAlign: 'center' }}>No subjects selected for {widgetCategory}</Text>
-                   </View>
-                 )}
-              </View>
-            </ScrollView>
-          </View>
-        </TouchableOpacity>
-
-
-        <Text style={[styles.sectionTitle, { color: colors.textSecondary, marginTop: 24 }]}>RESUME ACTIONS</Text>
-        
-        <View style={styles.resumeGrid}>
-           <ResumeCard 
-             icon={<Layout color="#007AFF" size={20} />} 
-             label="Syllabus" 
-             sub="Track progress" 
-             onPress={() => router.push('/tracker')} 
-             colors={colors}
-             width={CARD_WIDTH}
-           />
-           <ResumeCard 
-             icon={<RotateCcw color="#FF2D55" size={20} />} 
-             label="Flashcards" 
-             sub="Daily review" 
-             onPress={() => router.push('/flashcards')} 
-             colors={colors}
-             width={CARD_WIDTH}
-           />
-           <ResumeCard 
-             icon={<History color="#8E8E93" size={20} />} 
-             label="Review" 
-             sub="Past attempts" 
-             onPress={() => router.push({ pathname: '/analyse', params: { mode: 'review' } })} 
-             colors={colors}
-             width={CARD_WIDTH}
-           />
-           <ResumeCard 
-             icon={<BarChart3 color="#34C759" size={20} />} 
-             label="Analyse" 
-             sub="Performance" 
-             onPress={() => router.push({ pathname: '/analyse', params: { mode: 'overall' } })} 
-             colors={colors}
-             width={CARD_WIDTH}
-           />
-        </View>
-
-
-        {/* ── WIDGET GRID ── */}
-        <Text style={[styles.sectionTitle, { color: colors.textSecondary, marginTop: 24 }]}>MY WIDGETS</Text>
-        
-        {/* 🆕 Fixed height prevents infinite blank row in FlatList-inside-ScrollView */}
-        <View style={{ height: activeWidgets.length * 120 + 20 }}>
-          <DraggableFlatList
-            data={activeWidgets}
-            keyExtractor={(item) => item.id}
-            onDragEnd={handleReorder}
-            activationDistance={10}
-            renderItem={({ item, drag, isActive }) => (
-              <ScaleDecorator>
-                <TouchableOpacity
-                  onLongPress={drag}
-                  delayLongPress={250}
-                  disabled={isActive}
-                  style={{ marginBottom: 12 }}
-                >
-                  <WidgetRenderer
-                    widgetKey={item.widget_key}
-                    data={widgetData}
-                    onArchive={() => handleArchive(item.id)}
-                  />
-                </TouchableOpacity>
-              </ScaleDecorator>
-            )}
-          />
-        </View>
-
-        <TouchableOpacity onPress={() => setShowManage(true)} style={{ padding: 12, alignItems: 'center', marginBottom: 4 }}>
-          <Text style={{ color: colors.primary, fontWeight: '700' }}>
-            Manage Widgets ({archivedWidgets.length} archived)
-          </Text>
-        </TouchableOpacity>
-
-        {/* Manage (archived) widgets modal */}
-        <Modal visible={showManage} transparent animationType="slide" onRequestClose={() => setShowManage(false)}>
-          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
-            <View style={{ backgroundColor: colors.surface, padding: 24, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '80%' }}>
-              <Text style={{ fontSize: 20, fontWeight: '900', color: colors.textPrimary, marginBottom: 16 }}>Archived Widgets</Text>
-              <ScrollView nestedScrollEnabled>
-                {archivedWidgets.length === 0 ? (
-                  <Text style={{ color: colors.textTertiary, textAlign: 'center', padding: 24 }}>No archived widgets.</Text>
-                ) : (
-                  archivedWidgets.map(w => (
-                    <TouchableOpacity
-                      key={w.id}
-                      style={{ flexDirection: 'row', justifyContent: 'space-between', padding: 12, borderBottomWidth: 1, borderBottomColor: colors.border }}
-                      onPress={async () => {
-                        await WidgetService.restore(userId!, w.id);
-                        setWidgets(prev => prev.map(x => x.id === w.id ? { ...x, is_archived: false } : x));
-                      }}
-                    >
-                      <Text style={{ color: colors.textPrimary }}>{w.widget_key}</Text>
-                      <Text style={{ color: colors.primary, fontWeight: '700' }}>RESTORE</Text>
-                    </TouchableOpacity>
-                  ))
-                )}
-              </ScrollView>
-              <TouchableOpacity onPress={() => setShowManage(false)} style={{ padding: 16, alignItems: 'center' }}>
-                <Text style={{ color: colors.textTertiary, fontWeight: '700' }}>CLOSE</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-
-        <View style={[styles.analyticsPromo, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-           <View style={{ flex: 1 }}>
-              <Text style={[styles.promoTitle, { color: colors.textPrimary }]}>Detailed Analysis</Text>
-              <Text style={[styles.promoSub, { color: colors.textSecondary }]}>Check your weak areas and subject trends in the Analyse tab.</Text>
-           </View>
-           <TouchableOpacity 
-             style={[styles.promoBtn, { backgroundColor: colors.primary }]}
-             onPress={() => router.push('/(tabs)/analyse')}
-           >
-              <BarChart3 color="#FFF" size={20} />
-           </TouchableOpacity>
-        </View>
-      </ScrollView>
+            </Modal>
+          </>
+        )}
+      />
       <WidgetConfigModal 
         visible={configVisible} 
         onClose={() => setConfigVisible(false)}

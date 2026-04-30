@@ -61,15 +61,15 @@ import {
   Edit,
   Scissors
 } from 'lucide-react-native';
-import { supabase } from '../../src/lib/supabase';
-import { useAuth } from '../../src/context/AuthContext';
-import { useTheme } from '../../src/context/ThemeContext';
-import { PageWrapper } from '../../src/components/PageWrapper';
+import { supabase } from '@/src/lib/supabase';
+import { useAuth } from '@/src/context/AuthContext';
+import { useTheme } from '@/src/context/ThemeContext';
+import { PageWrapper } from '@/src/components/PageWrapper';
 import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
-import { FlashcardSvc } from '../../src/services/FlashcardService';
-import { AddBlockToFlashcardSheet } from '../../src/components/AddBlockToFlashcardSheet';
-import { useRecentNotes } from '../../src/hooks/useRecentNotes';
+import { FlashcardSvc } from '@/src/services/FlashcardService';
+import { AddBlockToFlashcardSheet } from '@/src/components/AddBlockToFlashcardSheet';
+import { useRecentNotes } from '@/src/hooks/useRecentNotes';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get('window');

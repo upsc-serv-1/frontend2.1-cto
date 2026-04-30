@@ -118,40 +118,30 @@ export default function FlashcardsDashboard() {
     }
 
     try {
-      const { data: states, error: sErr } = await supabase
-        .from('user_cards')
-        .select('*')
-        .eq('user_id', userId);
+      const [{ data: cards }, { data: states }, { data: sessions }] = await Promise.all([
+        supabase.from('cards').select('id, subject, section_group, microtopic'),
+        supabase.from('user_cards').select('*').eq('user_id', userId),
+        supabase.from('study_sessions').select('*').eq('user_id', userId).order('date', { ascending: false }).limit(30)
+      ]);
       
-      if (sErr) throw sErr;
-
       const now = new Date();
-      const total = states?.length || 0;
+      const userCardMap = new Map(states?.map(s => [s.card_id, s]) || []);
+      
+      const total = cards?.length || 0;
+      const studied = states?.length || 0;
       const due = states?.filter(c => c.status === 'active' && (!c.next_review || new Date(c.next_review) <= now)).length || 0;
       const mastered = states?.filter(c => c.learning_status === 'mastered').length || 0;
-      const accuracy = total > 0 ? Math.round((mastered / total) * 100) : 0;
+      const accuracy = studied > 0 ? Math.round((mastered / studied) * 100) : 0;
 
-      const { data: sessions } = await supabase
-        .from('study_sessions')
-        .select('*')
-        .eq('user_id', userId)
-        .order('date', { ascending: false })
-        .limit(30);
-      
       const heatmap: Record<string, number> = {};
       sessions?.forEach(s => heatmap[s.date] = s.cards_reviewed);
       setHeatmapData(heatmap);
-      
-      const { data: cards, error: cErr } = await supabase
-        .from('cards')
-        .select('subject, section_group, microtopic');
-      
-      if (cErr) throw cErr;
 
       const subjects = new Set<string>();
       const sectionsMap = new Map<string, Set<string>>();
       const microtopicsMap = new Map<string, Set<string>>();
       const cardCounts: Record<string, number> = {};
+      const dueCounts: Record<string, number> = {};
       
       cards?.forEach(c => {
         subjects.add(c.subject);
@@ -163,6 +153,11 @@ export default function FlashcardsDashboard() {
         microtopicsMap.get(mKey)!.add(c.microtopic);
         const cKey = `${c.subject}|${sec}|${c.microtopic}`;
         cardCounts[cKey] = (cardCounts[cKey] || 0) + 1;
+        
+        const state = userCardMap.get(c.id);
+        if (state?.status === 'active' && (!state.next_review || new Date(state.next_review) <= now)) {
+          dueCounts[cKey] = (dueCounts[cKey] || 0) + 1;
+        }
       });
 
       const initialTree: TreeItem[] = Array.from(subjects).sort().map(s => ({
@@ -182,7 +177,8 @@ export default function FlashcardsDashboard() {
       const rawHierarchy = { 
         sectionsMap: Object.fromEntries(Array.from(sectionsMap.entries()).map(([k, v]) => [k, Array.from(v)])), 
         microtopicsMap: Object.fromEntries(Array.from(microtopicsMap.entries()).map(([k, v]) => [k, Array.from(v)])), 
-        cardCounts 
+        cardCounts,
+        dueCounts
       };
       (global as any).rawHierarchy = rawHierarchy;
 
@@ -214,14 +210,22 @@ export default function FlashcardsDashboard() {
     if (item.isOpen) {
       setTreeData(prev => prev.filter(n => n.parentId !== item.id && !n.id.startsWith(item.id + '|')).map(n => n.id === item.id ? { ...n, isOpen: false } : n));
     } else {
-      const { sectionsMap, microtopicsMap, cardCounts } = (global as any).rawHierarchy;
+      const { sectionsMap, microtopicsMap, cardCounts, dueCounts } = (global as any).rawHierarchy;
       let children: TreeItem[] = [];
       if (item.type === 'subject') {
         const sections = (sectionsMap[item.id] || []).sort();
-        children = sections.map((s: string) => ({ id: `${item.id}|${s}`, name: s, type: 'section', parentId: item.id, cardCount: 0, dueCount: 0, isOpen: false, level: 1 }));
+        children = sections.map((s: string) => {
+          const sKeyPrefix = `${item.id}|${s}|`;
+          const sCardCount = Object.entries(cardCounts).filter(([k]) => k.startsWith(sKeyPrefix)).reduce((a, b) => a + (b[1] as number), 0);
+          const sDueCount = Object.entries(dueCounts).filter(([k]) => k.startsWith(sKeyPrefix)).reduce((a, b) => a + (b[1] as number), 0);
+          return { id: `${item.id}|${s}`, name: s, type: 'section', parentId: item.id, cardCount: sCardCount, dueCount: sDueCount, isOpen: false, level: 1 };
+        });
       } else if (item.type === 'section') {
         const micros = (microtopicsMap[item.id] || []).sort();
-        children = micros.map((m: string) => ({ id: `${item.id}|${m}`, name: m, type: 'microtopic', parentId: item.id, cardCount: cardCounts[`${item.id}|${m}`] || 0, dueCount: 0, isOpen: false, level: 2 }));
+        children = micros.map((m: string) => {
+          const mKey = `${item.id}|${m}`;
+          return { id: mKey, name: m, type: 'microtopic', parentId: item.id, cardCount: cardCounts[mKey] || 0, dueCount: dueCounts[mKey] || 0, isOpen: false, level: 2 };
+        });
       }
       const index = treeData.findIndex(n => n.id === item.id);
       const next = [...treeData];

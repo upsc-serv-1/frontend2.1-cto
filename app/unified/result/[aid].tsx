@@ -15,6 +15,9 @@ import { colors as defaultColors, radius, spacing } from '../../../src/theme';
 import { useTheme } from '../../../src/context/ThemeContext';
 import { useAuth } from '../../../src/context/AuthContext';
 import { PageWrapper } from '../../../src/components/PageWrapper';
+import { FlashcardSvc } from '../../../src/services/FlashcardService';
+import { StudentSync } from '../../../src/services/StudentSync';
+import { Alert } from 'react-native';
 
 type AttemptRow = {
   id: string;
@@ -55,6 +58,9 @@ const LEARNING_TAGS: { key: FilterKey; label: string }[] = [
   { key: 'must_revise', label: 'Must Revise' },
   { key: 'tricky', label: 'Tricky' },
 ];
+
+const ERROR_TYPES = ['Fact Mistake', 'Concept Gap', 'Silly Mistake', 'Overthinking', 'Skipped'];
+const REVIEW_TAGS = ['Imp. Fact', 'Imp. Concept', 'Trap Question', 'Must Revise', 'Memorize'];
 
 export default function ResultScreen() {
   const { aid } = useLocalSearchParams<{ aid: string }>();
@@ -130,6 +136,138 @@ export default function ResultScreen() {
       }
     })();
   }, [aid, session?.user.id]);
+
+  const handleTagError = async (questionId: string, errorType: string) => {
+    if (!attempt || !session?.user?.id) return;
+    
+    // 1. Update local state
+    setAttempt(prev => {
+      if (!prev) return prev;
+      const next = JSON.parse(JSON.stringify(prev));
+      const payloadQs = next.attempt_payload?.questions || [];
+      const q = payloadQs.find((x: any) => x.question_id === questionId);
+      if (q) q.error_category = errorType;
+      return next;
+    });
+
+    try {
+      // 2. Persist to attempts table (using RPC)
+      await supabase.rpc('update_attempt_error_category', {
+        attempt_id: attempt.id,
+        q_id: questionId,
+        new_cat: errorType,
+      });
+
+      // 3. Persist to question_states via StudentSync for reliable syncing
+      await StudentSync.enqueue('question_state', {
+        userId: session.user.id,
+        questionId: questionId,
+        testId: attempt.test_id,
+        attemptId: attempt.id,
+        patch: {
+          error_category: errorType
+        }
+      });
+      
+      // Update states to trigger filteredQuestions recalculation
+      setStates(prev => {
+        const next = [...prev];
+        const s = next.find(x => x.question_id === questionId);
+        if (s) {
+          s.error_category = errorType;
+        } else {
+          next.push({ 
+            id: '', 
+            question_id: questionId, 
+            error_category: errorType,
+            selected_answer: null,
+            time_spent_seconds: null,
+            review_tags: null,
+            confidence: null
+          });
+        }
+        return next;
+      });
+    } catch (err) {
+      console.error('[Result] Tag error:', err);
+    }
+  };
+
+  const toggleReviewTag = async (questionId: string, tag: string) => {
+    if (!attempt || !session?.user?.id) return;
+    
+    const payloadQs = attempt.attempt_payload?.questions || [];
+    const qPayload = payloadQs.find((x: any) => x.question_id === questionId);
+    const existingTags = Array.isArray(qPayload?.review_tags) ? qPayload.review_tags : [];
+    const newTags = existingTags.includes(tag) 
+      ? existingTags.filter((t: string) => t !== tag)
+      : [...existingTags, tag];
+
+    setAttempt(prev => {
+      if (!prev) return prev;
+      const next = JSON.parse(JSON.stringify(prev));
+      const target = next.attempt_payload.questions.find((x: any) => x.question_id === questionId);
+      if (target) target.review_tags = newTags;
+      return next;
+    });
+
+    try {
+      await supabase.rpc('update_attempt_review_tags', {
+        attempt_id: attempt.id,
+        q_id: questionId,
+        new_tags: newTags,
+      });
+
+      await StudentSync.enqueue('question_state', {
+        userId: session.user.id,
+        questionId: questionId,
+        testId: attempt.test_id,
+        attemptId: attempt.id,
+        patch: {
+          review_tags: newTags
+        }
+      });
+      
+      setStates(prev => {
+        const next = [...prev];
+        const s = next.find(x => x.question_id === questionId);
+        if (s) {
+          s.review_tags = newTags;
+        } else {
+          next.push({ id: '', question_id: questionId, review_tags: newTags, selected_answer: null, time_spent_seconds: null, error_category: null, confidence: null });
+        }
+        return next;
+      });
+    } catch (err) {
+      console.error('[Result] Tag toggle error:', err);
+    }
+  };
+
+  const handleAddToFlashcard = async (q: QuestionRow) => {
+    if (!attempt || !session?.user?.id) return;
+    try {
+      await FlashcardSvc.createCard(session.user.id, {
+        question_id: q.id,
+        test_id: attempt.test_id,
+        front_text: q.question_text,
+        back_text: `Correct Answer: ${q.correct_answer}\n\n${q.explanation_markdown || ''}`,
+        correct_answer: q.correct_answer,
+        explanation_markdown: q.explanation_markdown,
+        subject: q.subject || 'General',
+        section_group: q.micro_topic || 'General',
+        card_type: 'qa',
+        source: { 
+          kind: 'question', 
+          question_id: q.id,
+          options: q.options 
+        }
+      });
+      Alert.alert('Success', 'Flashcard created successfully!');
+    } catch (err) {
+      console.error('Flashcard error:', err);
+      Alert.alert('Error', 'Failed to create flashcard');
+    }
+  };
 
   const stats = useMemo(() => {
     if (!attempt) return null;
@@ -316,6 +454,39 @@ export default function ResultScreen() {
                     : <XCircle color={colors.error} size={18} />}
                 </View>
                 <Text style={[s.qs, { color: colors.textPrimary }]}>{q.question_text}</Text>
+                
+                <View style={s.optList}>
+                  {Object.entries(q.options || {}).map(([key, text]) => {
+                    const isCorrectOpt = key === q.correct_answer;
+                    const isSelectedOpt = key === p.selected_answer;
+                    
+                    let circleBg = colors.surface;
+                    let circleBorder = colors.border;
+                    let circleTxtColor = colors.textSecondary;
+                    
+                    if (isCorrectOpt) {
+                      circleBg = colors.success;
+                      circleBorder = colors.success;
+                      circleTxtColor = "#fff";
+                    } else if (isSelectedOpt && !isCorrectOpt) {
+                      circleBg = colors.error;
+                      circleBorder = colors.error;
+                      circleTxtColor = "#fff";
+                    }
+
+                    return (
+                      <View key={key} style={s.optRow}>
+                        <View style={[s.optCircle, { backgroundColor: circleBg, borderColor: circleBorder }]}>
+                          <Text style={[s.optCircleText, { color: circleTxtColor }]}>{key}</Text>
+                        </View>
+                        <Text style={[s.optText, { color: colors.textSecondary }, (isCorrectOpt || isSelectedOpt) && { color: colors.textPrimary, fontWeight: '700' }]}>
+                          {text}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+
                 <Text style={[s.lbl, { color: colors.textTertiary }]}>YOUR ANSWER</Text>
                 <Text style={[s.ans, isSkipped ? { color: colors.textTertiary } : isCorrect ? { color: colors.success } : { color: colors.error }]}>
                   {isSkipped ? 'Not Attempted' : selectedText}
@@ -332,6 +503,67 @@ export default function ResultScreen() {
                     <Text style={[s.exp, { color: colors.textSecondary }]} numberOfLines={6}>{q.explanation_markdown}</Text>
                   </>
                 ) : null}
+
+                {!isCorrect && !isSkipped && (
+                  <View style={s.tagRow}>
+                    {ERROR_TYPES.map(et => {
+                      // Try payload first, then states fallback
+                      const currentErrorCat = p.error_category || states.find(s => s.question_id === p.question_id)?.error_category;
+                      const selected = currentErrorCat === et;
+                      return (
+                        <TouchableOpacity
+                          key={et}
+                          onPress={() => handleTagError(p.question_id, et)}
+                          style={[
+                            s.tagChip,
+                            { 
+                              backgroundColor: selected ? colors.primary : colors.surface,
+                              borderColor: selected ? colors.primary : colors.border
+                            }
+                          ]}
+                        >
+                          <Text style={[s.tagChipText, { color: selected ? colors.primaryFg : colors.textSecondary }]}>
+                            {et}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+
+                <View style={s.tagRow}>
+                  {REVIEW_TAGS.map(tag => {
+                    const st = states.find(s => s.question_id === p.question_id);
+                    const existingTags = Array.isArray(p.review_tags) ? p.review_tags : (Array.isArray(st?.review_tags) ? st.review_tags : []);
+                    const selected = existingTags.includes(tag);
+                    
+                    return (
+                      <TouchableOpacity
+                        key={tag}
+                        onPress={() => toggleReviewTag(p.question_id, tag)}
+                        style={[
+                          s.tagChip,
+                          { 
+                            backgroundColor: selected ? colors.primary + '20' : colors.surface,
+                            borderColor: selected ? colors.primary : colors.border
+                          }
+                        ]}
+                      >
+                        <Text style={[s.tagChipText, { color: selected ? colors.primary : colors.textSecondary }]}>
+                          {tag}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                <TouchableOpacity 
+                  onPress={() => handleAddToFlashcard(q)}
+                  style={[s.flashBtn, { borderColor: colors.primary + '40' }]}
+                >
+                  <Zap size={14} color={colors.primary} />
+                  <Text style={[s.flashBtnText, { color: colors.primary }]}>ADD TO FLASHCARD</Text>
+                </TouchableOpacity>
               </View>
             );
           })}
@@ -460,4 +692,14 @@ const s = StyleSheet.create({
   exp: { color: defaultColors.textSecondary, fontSize: 13, marginTop: 4, lineHeight: 18 },
   cta: { backgroundColor: defaultColors.primary, padding: 16, borderRadius: radius.md, alignItems: 'center', justifyContent: 'center', flexDirection: 'row', gap: 8, marginTop: spacing.lg },
   ctaText: { color: defaultColors.primaryFg, fontWeight: '900', letterSpacing: 1 },
+  optList: { marginTop: 8, gap: 8 },
+  optRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  optCircle: { width: 24, height: 24, borderRadius: 12, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  optCircleText: { fontSize: 11, fontWeight: '900' },
+  optText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 12 },
+  tagChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, borderWidth: 1 },
+  tagChipText: { fontSize: 11, fontWeight: '700' },
+  flashBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, padding: 10, borderRadius: 10, borderWidth: 1, marginTop: 16, borderStyle: 'dashed' },
+  flashBtnText: { fontSize: 11, fontWeight: '900', letterSpacing: 0.5 },
 });

@@ -10,6 +10,7 @@ export default function NotesLayout() {
         gestureEnabled: true,
       }}
     >
+      <Stack.Screen name="index" />
       <Stack.Screen name="editor" options={{ animation: 'slide_from_right', animationDuration: 280 }} />
     </Stack>
   );
